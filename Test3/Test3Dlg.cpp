@@ -33,26 +33,41 @@ UINT WINAPIV ClientRecvThread( LPVOID pParam )
 	return pThis->ClientRecvThreadProc();
 }
 
+UINT WINAPIV ClientConnectThread(LPVOID pParam)
+{
+	CTest3Dlg * pThis = (CTest3Dlg *)pParam;
+	return pThis->ClientConnectThreadProc();
+}
+
 CTest3Dlg::CTest3Dlg(CWnd* pParent /*=NULL*/)
 	: CDialog(CTest3Dlg::IDD, pParent)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
-	InitializeCriticalSection(&m_CS_ClientArray);
 	m_ClientSocket = INVALID_SOCKET;
 	m_ServerSocket = INVALID_SOCKET;
+	m_bThreadWorking = false;
+	m_bConnected = false;
+	m_pServerListenThread = m_pServerRecvThread = false;
+	m_pClientConnectThread = m_pClientRecvThread = false;
+	m_bServerListenThreadWorking = m_bServerRecvThreadWorking = false;
+	m_bClientConnectThreadWorking = m_bClientRecvThreadWorking = false;
+	InitializeCriticalSection(&m_CS_ClientArray);
+	InitializeCriticalSection(&m_CS_ConnectStatus);
 }
 CTest3Dlg::~CTest3Dlg()
 {
-	if (m_ClientSocket != INVALID_SOCKET) 
-	{
-		closesocket(m_ClientSocket);
-	}
-	if (m_ClientSocket != INVALID_SOCKET) 
-	{
-		OnSocketDisconnect();
-		closesocket(m_ServerSocket);
-	}
+	m_bServerListenThreadWorking = false;
+	WaitForSingleObject(m_pServerListenThread, 500);
+	m_bServerRecvThreadWorking = false;
+	WaitForSingleObject(m_pServerRecvThread, 500);
+
+	m_bClientConnectThreadWorking = false;
+	WaitForSingleObject(m_pClientConnectThread, 500);
+	m_bClientRecvThreadWorking = false;
+	WaitForSingleObject(m_pClientRecvThread, 500);
+
 	DeleteCriticalSection(&m_CS_ClientArray);
+	DeleteCriticalSection(&m_CS_ConnectStatus);
 }
 
 void CTest3Dlg::DoDataExchange(CDataExchange* pDX)
@@ -68,6 +83,7 @@ BEGIN_MESSAGE_MAP(CTest3Dlg, CDialog)
 	//}}AFX_MSG_MAP
 	ON_BN_CLICKED(IDOK, &CTest3Dlg::OnBnClickedOk)
 	ON_BN_CLICKED(IDC_BUTTON1, &CTest3Dlg::OnBnClickedButton1)
+	ON_BN_CLICKED(IDC_BUTTON2, &CTest3Dlg::OnBnClickedButton2)
 END_MESSAGE_MAP()
 
 
@@ -85,7 +101,7 @@ BOOL CTest3Dlg::OnInitDialog()
 	// TODO: 在此添加额外的初始化代码
 	SetDlgItemInt(IDC_EDIT1, SERVER_PORT);
 
-	CString strIP = "10.177.10.163";
+	CString strIP = "127.0.0.1";
 	DWORD dwIP = inet_addr(strIP);
 	unsigned char *pIP = (unsigned char*)&dwIP;
 	m_ipCtrl.SetAddress(pIP[0], pIP[1], pIP[2], pIP[3]);
@@ -152,50 +168,110 @@ void CTest3Dlg::AddLog(CString str,...)
 void CTest3Dlg::OnBnClickedButton1()
 {
 	GetDlgItem(IDC_BUTTON1)->EnableWindow(FALSE);
+
+	if (m_ClientSocket != INVALID_SOCKET)
+		closesocket(m_ClientSocket);
 	m_ClientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (m_ClientSocket == INVALID_SOCKET)
 	{
 		AddLog("client >> create socket error-%d!", WSAGetLastError());
-		GetDlgItem(IDC_BUTTON1)->EnableWindow(TRUE);
+		SetBtnStatus(0);
 		return;
 	}
 
 	int nPort = GetDlgItemInt(IDC_EDIT1);
-
 	DWORD dwIP;
 	m_ipCtrl.GetAddress(dwIP);
-	
-	sockaddr_in saServer;
-	saServer.sin_family = AF_INET; //地址家族  
-    saServer.sin_port = htons(nPort); //注意转化为网络节序  
-    saServer.sin_addr.S_un.S_addr = htonl(dwIP);//inet_addr(CT2A(strIp));
-	AddLog("client >> connect to %s-%d", inet_ntoa(saServer.sin_addr), ntohs(saServer.sin_port));
-	if(SOCKET_ERROR == connect(m_ClientSocket,(SOCKADDR *)&saServer,sizeof(saServer)))
-	{
-		AddLog("client >> connect error-%d", WSAGetLastError());
-		GetDlgItem(IDC_BUTTON1)->EnableWindow(TRUE);
-		return ;
-	}
 
-	AfxBeginThread(ClientRecvThread,this);
+	m_saServer.sin_family = AF_INET; //地址家族  
+	m_saServer.sin_port = htons(nPort); //注意转化为网络节序  
+	m_saServer.sin_addr.S_un.S_addr = htonl(dwIP);//inet_addr(CT2A(strIp));
+
+	m_pClientConnectThread = AfxBeginThread(ClientConnectThread, this);
+	m_pClientRecvThread = AfxBeginThread(ClientRecvThread,this);
 }
 
 UINT CTest3Dlg::ClientRecvThreadProc()
 {
-	while(1)
+	m_bClientRecvThreadWorking = true;
+	while (m_bClientRecvThreadWorking)
 	{
-		char szBuf[256] = {0};
-		if(SOCKET_ERROR == recv(m_ClientSocket,szBuf,250,0))
+		LockConnectStatus();
+		if (!m_bConnected)
 		{
-			AddLog("client >> recv error-%d", WSAGetLastError());
-			GetDlgItem(IDC_BUTTON1)->EnableWindow(TRUE);
-			break;
+			UnLockConnectStatus();
+			Sleep(200);
+			continue;
 		}
-		else
+		UnLockConnectStatus();
+
+		char szBuf[256] = { 0 };
+		if (SOCKET_ERROR == recv(m_ClientSocket, szBuf, 250, 0))
 		{
-			AddLog((LPCTSTR)szBuf);
+			int nError = WSAGetLastError();
+			if (nError != 0)
+			{
+				SetBtnStatus(1);
+				LockConnectStatus(false);
+				continue;
+			}
 		}
+		AddLog((LPCTSTR)szBuf);
 	}
+	return 0;
+}
+
+UINT CTest3Dlg::ClientConnectThreadProc()
+{
+	int nLastError = 0;
+	m_bClientConnectThreadWorking = true;
+	while (m_bClientConnectThreadWorking)
+	{
+		LockConnectStatus();
+		if (m_bConnected)
+		{
+			UnLockConnectStatus();
+			Sleep(200);
+			continue;
+		}
+		UnLockConnectStatus();
+
+		if (SOCKET_ERROR == connect(m_ClientSocket, (SOCKADDR *)&m_saServer, sizeof(m_saServer)))
+		{
+			int nError = WSAGetLastError();
+			if (nLastError != nError && nError == 10056)//Socket is already connected
+			{
+				closesocket(m_ClientSocket);
+				m_ClientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+				nLastError = nError;
+			}
+			else if (nLastError != nError && nError == 10061)
+			{
+				AddLog(_T("Connection refused! [10061]"));
+				nLastError = nError;
+			}
+			else if (nLastError != nError)
+			{
+				int nError = WSAGetLastError();
+				CString strErrorMsg;
+				strErrorMsg.Format(_T("Connectting [%d]...."), nError);
+				AddLog(strErrorMsg);
+				nLastError = nError;
+			}
+			Sleep(100);
+			continue;
+		}
+		LockConnectStatus(true);
+		AddLog(_T("Connected OK! %s:%d"), inet_ntoa(m_saServer.sin_addr),ntohs(m_saServer.sin_port));
+		SetBtnStatus(2);
+		nLastError = 0;
+	}
+	if (m_ClientSocket != INVALID_SOCKET)
+	{
+		closesocket(m_ClientSocket);
+	}
+	m_bConnected = false;
+
 	return 0;
 }
 
@@ -226,13 +302,14 @@ void CTest3Dlg::StartServer()
 
 	SocketMng();
 
-	AfxBeginThread(ServerListenThread,this);
-	AfxBeginThread(ServerRecvThread,this);
+	m_pServerListenThread = AfxBeginThread(ServerListenThread,this);
+	m_pServerRecvThread = AfxBeginThread(ServerRecvThread,this);
 }
 
 UINT CTest3Dlg::ServerListenThreadProc()
 {
-	while(1)
+	m_bServerListenThreadWorking = true;
+	while(m_bServerListenThreadWorking)
 	{
 		sockaddr_in saClient = {0};
 		int  nClientSocketLen = sizeof(saClient);
@@ -244,6 +321,10 @@ UINT CTest3Dlg::ServerListenThreadProc()
 		}
 		OnSocketConnected(sClientSocket,&saClient);
 	}
+	if (m_ServerSocket != INVALID_SOCKET)
+	{
+		closesocket(m_ServerSocket);
+	}
 	return 0;
 }
 
@@ -253,7 +334,8 @@ UINT CTest3Dlg::ServerRecvThreadProc()
 	tv.tv_sec  = 5;
 	tv.tv_usec = 0;
 
-	while(1)
+	m_bServerRecvThreadWorking = true;
+	while(m_bServerRecvThreadWorking)
 	{
 		if(m_ClientArray.GetCount() == 0 ||
 			select(0, &m_fdSets, NULL, NULL, &tv) <= 0)
@@ -279,7 +361,11 @@ UINT CTest3Dlg::ServerRecvThreadProc()
 			int nRecvRet = recv(aClientInfo.sSocket,szRecvBuf,1024,0);
 			if(nRecvRet == SOCKET_ERROR)
 			{
-				AddLog("server >> recv error-%d", ::WSAGetLastError());
+				int nErr = ::WSAGetLastError();
+				if (nErr != 0)
+				{
+					AddLog("server >> [%d] client %s-%d", nErr, aClientInfo.strIp, aClientInfo.nPort);
+				}
 				OnSocketDisconnect(aClientInfo.sSocket);
 				continue;
 			}
@@ -301,7 +387,7 @@ void CTest3Dlg::OnSocketConnected(SOCKET sClientSocket,sockaddr_in * saClient)
 	LockClientArray();
 	m_ClientArray.Add(aClientInfo);
 	SocketMng(sClientSocket,1);
-	AddLog("server >> client add %s-%d",aClientInfo.strIp, aClientInfo.nPort);
+	AddLog("server >> add client %s-%d",aClientInfo.strIp, aClientInfo.nPort);
 	UnLockClientArray();
 }
 
@@ -317,9 +403,8 @@ void CTest3Dlg::OnSocketDisconnect(SOCKET aClientSocket)
 			SocketMng(aClientInfo.sSocket,-1);
 			closesocket(aClientInfo.sSocket);
 			m_ClientArray.RemoveAt(i);
-			AddLog("server >> client mov %s-%d",aClientInfo.strIp,aClientInfo.nPort);
-			if (aClientSocket != INVALID_SOCKET)
-				break;
+			AddLog("server >> mov client %s-%d", aClientInfo.strIp,aClientInfo.nPort);
+			if (aClientSocket != INVALID_SOCKET) break;
 		}
 	}
 	UnLockClientArray();
@@ -346,4 +431,37 @@ BOOL CTest3Dlg::SocketMng(SOCKET aClientSocket, int nFlag)
 		return FALSE;
 	}
 	return FD_ISSET(aClientSocket,&m_fdSets);//检查集合中指定的套节字是否可以读写
+}
+
+void CTest3Dlg::SetBtnStatus(int nFlag)
+{
+	if (nFlag == 0)
+	{
+		GetDlgItem(IDC_BUTTON1)->EnableWindow(true);
+		GetDlgItem(IDC_BUTTON2)->EnableWindow(false);
+		//GetDlgItem(IDC_BUTTON3)->EnableWindow(false);
+	}
+	else if (nFlag == 1)
+	{
+		GetDlgItem(IDC_BUTTON1)->EnableWindow(false);
+		GetDlgItem(IDC_BUTTON2)->EnableWindow(false);
+		//GetDlgItem(IDC_BUTTON3)->EnableWindow(false);
+	}
+	else
+	{
+		GetDlgItem(IDC_BUTTON1)->EnableWindow(false);
+		GetDlgItem(IDC_BUTTON2)->EnableWindow(true);
+		//GetDlgItem(IDC_BUTTON3)->EnableWindow(true);
+	}
+
+}
+
+void CTest3Dlg::OnBnClickedButton2()
+{
+	m_bClientConnectThreadWorking = false;
+	WaitForSingleObject(m_pClientConnectThread, 500);
+	m_bClientRecvThreadWorking = false;
+	WaitForSingleObject(m_pClientRecvThread, 500);
+
+	SetBtnStatus(0);
 }
