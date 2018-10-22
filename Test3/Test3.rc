@@ -16,13 +16,11 @@
 #undef APSTUDIO_READONLY_SYMBOLS
 
 /////////////////////////////////////////////////////////////////////////////
-// 中文(中华人民共和国) resources
+// 中文(简体，中国) resources
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
-#ifdef _WIN32
 LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 #pragma code_page(936)
-#endif //_WIN32
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -72,6 +70,7 @@ END
 // remains consistent on all systems.
 IDR_MAINFRAME           ICON                    "res\\Test3.ico"
 
+
 /////////////////////////////////////////////////////////////////////////////
 //
 // Dialog
@@ -83,11 +82,12 @@ EXSTYLE WS_EX_APPWINDOW
 CAPTION "Test3"
 FONT 9, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
-    DEFPUSHBUTTON   "清空",IDOK,191,15,33,14
+    DEFPUSHBUTTON   "清空",IDOK,223,15,33,14
     PUSHBUTTON      "链接",IDC_BUTTON1,160,15,27,14
     CONTROL         "",IDC_IPADDRESS1,"SysIPAddress32",WS_TABSTOP,7,14,100,15
     EDITTEXT        IDC_EDIT1,116,15,40,14,ES_AUTOHSCROLL | ES_NUMBER
     LISTBOX         IDC_LIST1,7,36,306,157,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "断开",IDC_BUTTON2,192,15,27,14
 END
 
 
@@ -136,7 +136,7 @@ END
 //
 
 #ifdef APSTUDIO_INVOKED
-GUIDELINES DESIGNINFO 
+GUIDELINES DESIGNINFO
 BEGIN
     IDD_TEST3_DIALOG, DIALOG
     BEGIN
@@ -148,7 +148,18 @@ BEGIN
 END
 #endif    // APSTUDIO_INVOKED
 
-#endif    // 中文(中华人民共和国) resources
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_TEST3_DIALOG AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+#endif    // 中文(简体，中国) resources
 /////////////////////////////////////////////////////////////////////////////
 
 
